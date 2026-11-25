@@ -36,6 +36,11 @@ namespace emv
         constexpr uint32_t TagCardholderName       = 0x5F20;
         constexpr uint32_t TagCardholderNameExt    = 0x9F0B;
         constexpr uint32_t TagTrack1               = 0x56;
+        constexpr uint32_t TagPan                  = 0x5A;
+        constexpr uint32_t TagTrack2               = 0x57;
+        constexpr uint32_t TagTrack2Mastercard     = 0x9F6B;
+
+        constexpr size_t BinLength = 6;
 
         uint8_t ToBcd(int value)
         {
@@ -148,14 +153,75 @@ namespace emv
             return FormatName(std::span<const uint8_t>(first + 1, second));
         }
 
-        std::optional<std::string> ExtractCardholderName(std::span<const uint8_t> buffer)
+        // First 6 digits of a BCD-encoded PAN (tag 5A) or Track 2 image (tags 57 / 9F6B).
+        // Track 2 uses nibble 'D' as the field separator, so stop at the first non-digit.
+        std::optional<std::string> BinFromBcd(std::span<const uint8_t> value)
         {
-            std::vector<Tlv> nodes;
-            if (!ParseTlv(buffer, nodes))
+            std::string digits;
+            for (uint8_t byte : value)
             {
-                return std::nullopt;
+                for (const uint8_t nibble : { static_cast<uint8_t>(byte >> 4), static_cast<uint8_t>(byte & 0x0F) })
+                {
+                    if (nibble > 9)
+                    {
+                        return std::nullopt;
+                    }
+                    digits.push_back(static_cast<char>('0' + nibble));
+                    if (digits.size() == BinLength)
+                    {
+                        return digits;
+                    }
+                }
+            }
+            return std::nullopt;
+        }
+
+        // Track 1 format: [%]B<PAN>^NAME^...
+        std::optional<std::string> BinFromTrack1(std::span<const uint8_t> track1)
+        {
+            size_t pos = 0;
+            if (pos < track1.size() && track1[pos] == '%')
+            {
+                ++pos;
+            }
+            if (pos < track1.size() && track1[pos] == 'B')
+            {
+                ++pos;
             }
 
+            std::string digits;
+            for (; pos < track1.size() && digits.size() < BinLength; ++pos)
+            {
+                if (track1[pos] < '0' || track1[pos] > '9')
+                {
+                    return std::nullopt;
+                }
+                digits.push_back(static_cast<char>(track1[pos]));
+            }
+            return digits.size() == BinLength ? std::optional<std::string>(digits) : std::nullopt;
+        }
+
+        std::optional<std::string> ExtractBin(std::span<const uint8_t> buffer, const std::vector<Tlv>& nodes)
+        {
+            for (const uint32_t tag : { TagPan, TagTrack2, TagTrack2Mastercard })
+            {
+                if (const Tlv* node = FindTag(nodes, tag))
+                {
+                    if (auto bin = BinFromBcd(ValueOf(buffer, *node)))
+                    {
+                        return bin;
+                    }
+                }
+            }
+            if (const Tlv* node = FindTag(nodes, TagTrack1))
+            {
+                return BinFromTrack1(ValueOf(buffer, *node));
+            }
+            return std::nullopt;
+        }
+
+        std::optional<std::string> ExtractCardholderName(std::span<const uint8_t> buffer, const std::vector<Tlv>& nodes)
+        {
             if (const Tlv* node = FindTag(nodes, TagCardholderName))
             {
                 if (auto name = FormatName(ValueOf(buffer, *node)))
@@ -178,6 +244,26 @@ namespace emv
                 }
             }
             return std::nullopt;
+        }
+
+        // Pulls whatever is still missing (name, BIN) out of a response.
+        // Returns true once both have been found and no more records need to be read.
+        // Only the first 6 digits of the PAN are kept; the full PAN is never stored.
+        bool HarvestCardData(std::span<const uint8_t> buffer, CardResult& result)
+        {
+            std::vector<Tlv> nodes;
+            if (ParseTlv(buffer, nodes))
+            {
+                if (!result.cardholderName)
+                {
+                    result.cardholderName = ExtractCardholderName(buffer, nodes);
+                }
+                if (!result.bin)
+                {
+                    result.bin = ExtractBin(buffer, nodes);
+                }
+            }
+            return result.cardholderName && result.bin;
         }
 
         bool IsCase4(const Bytes& command)
@@ -365,9 +451,8 @@ namespace emv
                 {
                     break; // 6A83 (no such record) or 6A82 (no such file): next SFI.
                 }
-                if (auto name = ExtractCardholderName(response.data))
+                if (HarvestCardData(response.data, result))
                 {
-                    result.cardholderName = std::move(name);
                     return true;
                 }
             }
@@ -396,10 +481,9 @@ namespace emv
         Bytes afl;
         if (gpoSucceeded)
         {
-            // Contactless cards sometimes return the name directly in the GPO response.
-            if (auto name = ExtractCardholderName(gpo.data))
+            // Contactless cards often return Track 2 (and sometimes the name) directly in GPO.
+            if (HarvestCardData(gpo.data, result))
             {
-                result.cardholderName = std::move(name);
                 return result;
             }
 
@@ -449,9 +533,8 @@ namespace emv
                 {
                     continue;
                 }
-                if (auto name = ExtractCardholderName(response.data))
+                if (HarvestCardData(response.data, result))
                 {
-                    result.cardholderName = std::move(name);
                     return result;
                 }
             }

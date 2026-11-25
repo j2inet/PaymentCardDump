@@ -187,6 +187,7 @@ void ReaderWorker::ProcessCard(SCARDCONTEXT context, const SCARD_READERSTATEW& s
             description += ", " + result.applicationLabel;
         }
         log_.Info(std::format("ACCEPTED  AID: {} ({})", emv::ToHex(result.aid, false), description));
+        log_.Info(std::format("          BIN: {}", result.bin ? *result.bin : std::string("<not available>")));
 
         if (result.cardholderName)
         {

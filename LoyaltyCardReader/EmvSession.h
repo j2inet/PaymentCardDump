@@ -33,11 +33,12 @@ namespace emv
         std::string scheme;             // Scheme for the RID that matched, e.g. "Visa"
         std::string applicationLabel;   // Tag 50, if present
         std::optional<std::string> cardholderName;
+        std::optional<std::string> bin;  // First 6 digits of the PAN (issuer identification)
     };
 
     // Runs the EMV read flow against a connected card:
     //   SELECT (by RID priority) -> GET PROCESSING OPTIONS -> READ RECORD (per AFL)
-    // and stops as soon as the cardholder name has been found.
+    // and stops as soon as both the cardholder name and the BIN have been found.
     class EmvSession
     {
     public:

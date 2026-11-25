@@ -24,12 +24,15 @@ from the card's EMV application, so nobody has to type it in.
 5. If none of them can be selected, the worker prints a **REJECTED** message.
 6. Otherwise it reads the name with these commands:
    * `GET PROCESSING OPTIONS`, with the card's PDOL filled in with zero-amount terminal values.
-   * `READ RECORD` for each entry in the AFL. The worker stops as soon as it finds a name.
+   * `READ RECORD` for each entry in the AFL. The worker stops once it has both the name and the BIN.
    * It looks for tag `5F20` (cardholder name) first, then `9F0B` (extended name), then the
      name field in Track 1 (`56`). The card stores names as `SURNAME/GIVEN`; the app
      prints them as `GIVEN SURNAME`.
+   * It reads the **BIN** (the first 6 digits of the card number, which identify the issuer)
+     from the PAN (`5A`), or from the Track 2 data (`57` / `9F6B`) or Track 1 data (`56`).
+     The app keeps only those 6 digits. It never stores or prints the full card number.
    * If the card rejects GPO, the worker tries reading records from SFI 1–10 directly.
-7. Prints **ACCEPTED** with the full AID (from tag `84`) and the name.
+7. Prints **ACCEPTED** with the full AID (from tag `84`), the BIN and the name.
 8. Waits for the card to be removed, then waits for the next one.
 
 ## Build
@@ -51,7 +54,7 @@ Press Ctrl+C to exit.
 Verbose mode prints each command (`>>`) and response (`<<`) together with the status word.
 Before printing, it masks the values of the PAN (`5A`), Track 1/2 data (`56`, `57`, `9F6B`,
 `9F1F`, `9F20`) and expiry date (`5F24`) as `**`. If a response can't be parsed as TLV,
-the whole response is hidden. The app never prints or stores the PAN in normal mode.
+the whole response is hidden. Outside of the BIN, the app never prints or stores the PAN.
 
 ## Things to know
 
